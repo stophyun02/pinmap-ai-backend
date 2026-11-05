@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env server.mjs",
     "start:background": "node start.mjs",
+    "start:ollama": "AI_PROVIDER=ollama PORT=8102 node start.mjs",
     "prepare:data": "python3 scripts/import-instagram-export.py",
     "test": "node --test tests/*.test.mjs"
   },

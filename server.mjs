@@ -5,17 +5,23 @@ import {fileURLToPath} from 'node:url';
 import {Store} from './lib/store.mjs';
 import {loadCatalog,catalogView,resolveSourceRoot} from './lib/catalog.mjs';
 import {OpenAIClient} from './lib/openai-client.mjs';
+import {OllamaClient} from './lib/ollama-client.mjs';
 import {AnalysisEngine,publicJob} from './lib/engine.mjs';
 import {saveUpload,ffmpeg} from './lib/media.mjs';
 import {AppError,safeError} from './lib/errors.mjs';
 const here=path.dirname(fileURLToPath(import.meta.url));
-export async function createApp({sourceRoot,dataRoot=path.join(here,'.data'),fetchImpl=fetch,initialSettings={}}={}){
+export async function createApp({sourceRoot,dataRoot=path.join(here,process.env.AI_PROVIDER==='ollama'?'.data-ollama':'.data'),fetchImpl=fetch,initialSettings={}}={}){
   sourceRoot=sourceRoot||await resolveSourceRoot(here);
-  const settings={apiKey:process.env.OPENAI_API_KEY||'',model:process.env.OPENAI_MODEL||'gpt-4.1-mini',transcriptionModel:process.env.OPENAI_TRANSCRIPTION_MODEL||'gpt-4o-mini-transcribe',maxImages:24,maxOutputTokens:2400,maxVideoSeconds:600,...initialSettings};
+  const providerName=initialSettings.providerName||process.env.AI_PROVIDER||'openai';
+  if(!['openai','ollama'].includes(providerName))throw new AppError('지원하지 않는 AI 제공자입니다.',{code:'unsupported_provider'});
+  const settings={providerName,apiKey:process.env.OPENAI_API_KEY||'',model:providerName==='ollama'?(process.env.OLLAMA_MODEL||'qwen2.5vl:3b'):(process.env.OPENAI_MODEL||'gpt-4.1-mini'),transcriptionModel:process.env.OPENAI_TRANSCRIPTION_MODEL||'gpt-4o-mini-transcribe',maxImages:providerName==='ollama'?4:24,maxOutputTokens:providerName==='ollama'?1400:2400,maxVideoSeconds:600,...initialSettings};
+  settings.configured=providerName==='openai'?!!settings.apiKey:false;
   const store=new Store(dataRoot);await store.init();let catalog=await loadCatalog(sourceRoot,store);
-  const provider=new OpenAIClient({settings,fetchImpl}),engine=new AnalysisEngine({store,settings,provider});await engine.init();
+  const provider=providerName==='ollama'?new OllamaClient({settings,fetchImpl}):new OpenAIClient({settings,fetchImpl}),engine=new AnalysisEngine({store,settings,provider});await engine.init();
+  const refreshProvider=async()=>{if(providerName==='ollama')settings.configured=await provider.available();return settings.configured;};
+  await refreshProvider();
   const staticFiles={'/':'index.html','/app.js':'app.js','/style.css':'style.css'};
-  const safeSettings=()=>({configured:!!settings.apiKey,model:settings.model,transcription_model:settings.transcriptionModel,max_images:settings.maxImages,max_video_seconds:settings.maxVideoSeconds,max_output_tokens:settings.maxOutputTokens});
+  const safeSettings=()=>({provider:providerName,configured:settings.configured,model:settings.model,transcription_model:providerName==='ollama'?null:settings.transcriptionModel,max_images:settings.maxImages,max_video_seconds:settings.maxVideoSeconds,max_output_tokens:settings.maxOutputTokens});
   const respond=(res,status,body)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(body));};
   const readBody=async(req,limit=1024*1024)=>{let size=0;const buffers=[];for await(const b of req){size+=b.length;if(size>limit)throw new AppError('요청 크기 제한을 초과했습니다.',{code:'request_too_large',status:413});buffers.push(b);}return Buffer.concat(buffers);};
   const requireJson=async req=>{if(!(req.headers['content-type']||'').startsWith('application/json'))throw new AppError('JSON 형식의 입력이 필요합니다.',{status:415});try{return JSON.parse((await readBody(req)).toString()||'{}');}catch(e){if(e instanceof AppError)throw e;throw new AppError('JSON 입력이 올바르지 않습니다.');}};
@@ -26,7 +32,7 @@ export async function createApp({sourceRoot,dataRoot=path.join(here,'.data'),fet
       if(req.headers.origin&&!['http://127.0.0.1:'+port,'http://localhost:'+port].includes(req.headers.origin))throw new AppError('다른 사이트에서 실행할 수 없습니다.',{status:403});
       const url=new URL(req.url,'http://127.0.0.1:'+port);
       if(req.method==='GET'&&staticFiles[url.pathname]){const file=staticFiles[url.pathname];res.writeHead(200,{'Content-Type':file.endsWith('.html')?'text/html; charset=utf-8':file.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"});res.end(await fs.readFile(path.join(here,'web',file)));return;}
-      if(req.method==='GET'&&(url.pathname==='/health'||url.pathname==='/api/state')){respond(res,200,{ok:true,service:'pinmap-ai-analysis',meta_api_enabled:false,settings:safeSettings(),media_processor:!!ffmpeg,catalog:{total:catalog.length,visual_ready:catalog.filter(p=>p.assets.some(a=>a.kind!=='audio')).length,caption_available:catalog.filter(p=>p.caption.trim()).length,original_video_files:catalog.reduce((n,p)=>n+p.assets.filter(a=>a.kind==='video').length,0)},queue:engine.state()});return;}
+      if(req.method==='GET'&&(url.pathname==='/health'||url.pathname==='/api/state')){await refreshProvider();respond(res,200,{ok:true,service:'pinmap-ai-analysis',meta_api_enabled:false,settings:safeSettings(),media_processor:!!ffmpeg,catalog:{total:catalog.length,visual_ready:catalog.filter(p=>p.assets.some(a=>a.kind!=='audio')).length,caption_available:catalog.filter(p=>p.caption.trim()).length,original_video_files:catalog.reduce((n,p)=>n+p.assets.filter(a=>a.kind==='video').length,0)},queue:engine.state()});return;}
       if(req.method==='GET'&&url.pathname==='/api/posts'){const q=(url.searchParams.get('q')||'').toLowerCase(),ready=url.searchParams.get('ready')==='true';respond(res,200,{posts:catalog.filter(p=>(!q||[p.id,p.code,p.title].some(x=>x?.toLowerCase().includes(q)))&&(!ready||p.assets.some(a=>a.kind!=='audio'))).map(catalogView)});return;}
       if(req.method==='GET'&&url.pathname==='/api/jobs'){respond(res,200,{jobs:engine.list()});return;}
       if(req.method==='GET'&&url.pathname==='/api/results'){respond(res,200,{results:engine.list().filter(j=>j.status==='completed').map(j=>({job_id:j.id,item_id:j.item_id,source_url:j.source_url,coverage:j.coverage,evidence:j.evidence,result:j.result,usage:j.usage,provider:j.provider,completed_at:j.completed_at}))});return;}
@@ -44,9 +50,15 @@ export async function createApp({sourceRoot,dataRoot=path.join(here,'.data'),fet
         const body=await requireJson(req);
         if(url.pathname==='/api/settings'){
           if(engine.processing)throw new AppError('현재 작업이 끝난 뒤 연결 정보를 바꾸세요.',{status:409});
+          if(providerName==='ollama'){
+            if(typeof body.model!=='string'||!/^[A-Za-z0-9._:-]{1,100}$/.test(body.model))throw new AppError('Ollama 모델 이름을 확인해 주세요.');
+            settings.model=body.model;await refreshProvider();
+            if(!settings.configured)throw new AppError('Ollama 서버에서 해당 모델을 찾지 못했습니다. 먼저 모델을 설치하세요.',{code:'model_not_installed',status:503});
+            respond(res,200,{...safeSettings(),message:'로컬 Ollama 모델을 적용했습니다.'});return;
+          }
           if(typeof body.api_key!=='string'||!body.api_key.trim()||/\s/.test(body.api_key.trim()))throw new AppError('OpenAI API 키를 확인해 주세요.');
           for(const k of ['model','transcription_model'])if(body[k]&&!/^[A-Za-z0-9._:-]{1,100}$/.test(body[k]))throw new AppError('모델 이름이 올바르지 않습니다.');
-          settings.apiKey=body.api_key.trim();if(body.model)settings.model=body.model;if(body.transcription_model)settings.transcriptionModel=body.transcription_model;
+          settings.apiKey=body.api_key.trim();settings.configured=true;if(body.model)settings.model=body.model;if(body.transcription_model)settings.transcriptionModel=body.transcription_model;
           respond(res,200,{...safeSettings(),message:'AI 키는 이 서버의 메모리에만 적용했습니다.'});return;
         }
         if(url.pathname==='/api/catalog/refresh'){catalog=await loadCatalog(sourceRoot,store);respond(res,200,{total:catalog.length});return;}
@@ -56,16 +68,16 @@ export async function createApp({sourceRoot,dataRoot=path.join(here,'.data'),fet
           let posts=catalog;if(body.post_ids){const ids=new Set(body.post_ids);posts=catalog.filter(p=>ids.has(p.id));if(posts.length!==ids.size)throw new AppError('존재하지 않는 게시물 ID가 있습니다.');}
           const requireVisual=body.require_visual!==false;if(requireVisual&&!body.post_ids)posts=posts.filter(p=>p.assets.some(a=>a.kind!=='audio'));
           posts=posts.slice(0,limit);if(!posts.length)throw new AppError('분석 가능한 입력 자료가 없습니다.',{code:'missing_input'});
-          const r=await engine.enqueue(posts,{force:body.force===true,requireVisual});respond(res,202,r);return;
+          await refreshProvider();const r=await engine.enqueue(posts,{force:body.force===true,requireVisual});respond(res,202,r);return;
         }
         if(url.pathname==='/api/queue/pause'){engine.pause();respond(res,200,engine.state());return;}
-        if(url.pathname==='/api/queue/resume'){engine.resume();respond(res,200,engine.state());return;}
+        if(url.pathname==='/api/queue/resume'){await refreshProvider();engine.resume();respond(res,200,engine.state());return;}
         if(jobRoute?.[2]==='cancel'){await engine.cancel(jobRoute[1]);respond(res,200,{cancel_requested:true});return;}
       }
       throw new AppError('요청한 경로를 찾지 못했습니다.',{status:404});
     }catch(e){respond(res,e.status>=400&&e.status<=599?e.status:500,{error:{code:e.code||'server_error',message:safeError(e,settings.apiKey)}});}
   });
-  server.requestTimeout=300000;server.headersTimeout=30000;
+  server.requestTimeout=900000;server.headersTimeout=30000;
   return{server,engine,settings,store,getCatalog:()=>catalog};
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){

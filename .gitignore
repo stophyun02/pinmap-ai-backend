@@ -1,5 +1,6 @@
 node_modules/
 .data/
+.data-ollama/
 .env
 .env.*
 !.env.example
