@@ -1,0 +1,21 @@
+{
+  "archive": "instagram-080.014-2026-11-04-bV80AR5s.zip",
+  "archive_sha256": "4f132ccae9b5395ebc4809f986bd7e8d2b141bd6eb898c7fbc874fb6cea55439",
+  "archive_bytes": 4458051,
+  "post_count": 349,
+  "caption_available": 341,
+  "collection_count": 11,
+  "media_entries": 0,
+  "archive_entries": [
+    "your_instagram_activity/saved/saved_posts.json",
+    "your_instagram_activity/saved/saved_collections.json"
+  ],
+  "source_posts_entry": "your_instagram_activity/saved/saved_posts.json",
+  "text_encoding_repair": "latin1-to-utf8 only when the round trip is valid",
+  "ai_calls": 0,
+  "limitations": [
+    "ZIP에는 원본 사진·영상이 없습니다.",
+    "내보내기 timestamp를 게시물 생성일로 간주하지 않습니다.",
+    "컬렉션과 저장 이유를 AI 입력에 넣지 않습니다."
+  ]
+}
