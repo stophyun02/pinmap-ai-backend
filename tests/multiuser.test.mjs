@@ -8,6 +8,7 @@ import {claimJob,markExpiredJobs} from '../service/jobs.mjs';
 import {processJob} from '../service/worker.mjs';
 import {openDatabase} from '../service/db.mjs';
 import {VllmClient} from '../service/vllm-client.mjs';
+import {migrateLegacy} from '../service/migrate-legacy.mjs';
 
 const fixture=path.resolve('fixtures/instagram-export/instagram-080.014-2026-11-04-bV80AR5s.zip');
 const sampleResult={title:'시험',summary:'캡션 기반 요약',summary_evidence_ids:['caption'],topics:[],visible_text:[],facts:[],inferences:[],limitations:[]};
@@ -72,4 +73,18 @@ test('vLLM adapter uses structured vision request and validates evidence',async(
     await client.summarize({evidence:[{id:'caption',kind:'caption',text:'시험'},{id:'image',kind:'image'}],images:[{id:'image',kind:'image',mime:'image/png',path:image}],coverage:{kind:'uploaded_images'}},{sourceUrl:'https://www.instagram.com/p/abc/'});
     assert.match(body.messages[1].content.at(-1).image_url.url,/^data:image\/png;base64,/);
   }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+test('legacy migration assigns historical results only to the chosen account and is repeatable',async()=>{
+  const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pinmap-migrate-')),dataDir=path.join(folder,'new'),legacyRoot=path.join(folder,'old'),db=openDatabase(path.join(dataDir,'pinmap.sqlite'));
+  try{
+    const date=new Date().toISOString(),first=JSON.parse(await fs.readFile('fixtures/instagram-export/pinmap-items.json','utf8'))[0];
+    db.prepare('INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)').run('owner','owner@example.com','test',date);
+    db.prepare('INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)').run('other','other@example.com','test',date);
+    await fs.mkdir(path.join(legacyRoot,'jobs'),{recursive:true});
+    await fs.writeFile(path.join(legacyRoot,'jobs','historical.json'),JSON.stringify({status:'completed',item_id:first.id,fingerprint:'old-fingerprint',source_url:first.url,created_at:date,completed_at:date,material:{caption:first.sourceCaption},provider:{name:'ollama',model:'test'},result:sampleResult,evidence:[{id:'caption',kind:'caption'}],coverage:{kind:'caption_only'},usage:{}}));
+    const options={db,dataDir,email:'owner@example.com',sourceRoot:path.resolve('fixtures/instagram-export'),legacyRoot};
+    const migrated=await migrateLegacy(options);assert.equal(migrated.imported_posts,349);assert.equal(migrated.imported_results,1);
+    const again=await migrateLegacy(options);assert.equal(again.imported_posts,0);assert.equal(again.imported_results,0);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM posts WHERE user_id=?').get('other').n,0);
+  }finally{db.close();await fs.rm(folder,{recursive:true,force:true});}
 });

@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env service/api.mjs",
     "worker": "node --env-file-if-exists=.env service/worker.mjs",
+    "migrate:legacy": "node --env-file-if-exists=.env service/migrate-legacy.mjs",
     "start:legacy": "node --env-file-if-exists=.env server.mjs",
     "start:background": "node start.mjs",
     "start:ollama": "AI_PROVIDER=ollama PORT=8102 node start.mjs",

@@ -10,7 +10,7 @@ API와 AI 작업자는 별도 프로세스이며 같은 SQLite WAL 데이터베�
 
 Node.js 22 이상, Ollama와 이미지 모델이 필요합니다. `npm ci`를 실행하고 `.env.multiuser.example`을 `.env`로 복사해 긴 임의의 `PINMAP_INVITE_CODE`를 설정하세요. `MULTIUSER_AI_PROVIDER=ollama`, `MULTIUSER_MODEL=qwen2.5vl:3b`로 두고 모델을 설치합니다. 터미널 두 개에서 각각 `npm start`, `npm run worker`를 실행한 뒤 [http://127.0.0.1:8200/](http://127.0.0.1:8200/)을 엽니다. 기존 `.env`에 OpenAI 키가 있더라도 새 서버는 이 키를 읽어 AI 제공자에게 전달하지 않습니다.
 
-개발용 로컬 계정의 자료는 `.multiuser-data/`에 저장됩니다. 사용자마다 ZIP을 다시 가져와야 하며, 저장소에 포함된 349건 ZIP이 새 가입자의 계정에 자동으로 들어가지는 않습니다. 기존 단일 사용자 작업 결과는 자동 이전되지 않습니다.
+개발용 로컬 계정의 자료는 `.multiuser-data/`에 저장됩니다. 사용자마다 ZIP을 다시 가져와야 하며, 저장소에 포함된 349건 ZIP이 새 가입자의 계정에 자동으로 들어가지는 않습니다. 기존 1인용 자료를 자신의 새 계정으로 옮길 때는 먼저 화면에서 가입한 뒤 `npm run migrate:legacy -- 본인_이메일`을 한 번 실행합니다. 기존 게시물, 확보한 화면 캡처와 완료된 Ollama 결과만 복사하며 원본 파일을 지우지 않습니다. 다시 실행하면 이미 옮긴 항목은 건너뜁니다.
 
 ## 인터넷 서버에 배포
 
