@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import {AppError} from '../lib/errors.mjs';
-import {RESULT_SCHEMA,SYSTEM_PROMPT,validateResult} from '../lib/contract.mjs';
+import {RESULT_SCHEMA,SYSTEM_PROMPT,VISUAL_TEXT_SCHEMA,VISUAL_TEXT_PROMPT,validateResult,validateVisualText} from '../lib/contract.mjs';
 
 export class VllmClient {
   constructor({baseUrl,model,apiKey,fetchImpl=fetch}){
@@ -10,10 +10,21 @@ export class VllmClient {
     this.endpoint=new URL('chat/completions',root+(url.pathname.replace(/\/$/,'').endsWith('/v1')?'':'v1/'));
     this.model=model;this.apiKey=apiKey;this.fetch=fetchImpl;this.supportsAudio=false;
   }
+  async describeImage(img,{signal,model=this.model}={}){
+    const bytes=await fs.readFile(img.path),content=[{type:'text',text:JSON.stringify({evidence_id:img.id,kind:img.kind,time_seconds:img.time_seconds})},{type:'image_url',image_url:{url:`data:${img.mime};base64,${bytes.toString('base64')}`}}];
+    let response;
+    try{response=await this.fetch(this.endpoint,{method:'POST',headers:{'Content-Type':'application/json',...(this.apiKey?{Authorization:`Bearer ${this.apiKey}`}:{})},body:JSON.stringify({model,messages:[{role:'system',content:VISUAL_TEXT_PROMPT},{role:'user',content}],temperature:0,max_tokens:700,response_format:{type:'json_schema',json_schema:{name:'pinmap_visual_text',schema:VISUAL_TEXT_SCHEMA,strict:true}}}),signal:AbortSignal.any([signal||new AbortController().signal,AbortSignal.timeout(900000)]),redirect:'error'});}
+    catch{throw new AppError('이미지 분석 서버와 연결이 끊겼습니다.',{code:'ambiguous_network_failure',status:502});}
+    let body;try{body=await response.json();}catch{throw new AppError('이미지 분석 응답을 읽지 못했습니다.',{code:'invalid_provider_response',status:502});}
+    const choice=body.choices?.[0];if(!response.ok||body.error||choice?.finish_reason!=='stop')throw new AppError('이미지 분석 요청이 완료되지 않았습니다.',{code:'visual_provider_error',status:response.status||502});
+    let value;try{value=JSON.parse(choice.message?.content||'');}catch{throw new AppError('이미지 설명이 JSON이 아닙니다.',{code:'invalid_visual_text',status:502});}
+    return{...validateVisualText(value),model:body.model||model,usage:body.usage||null};
+  }
   async summarize(prepared,{sourceUrl,signal,model=this.model,maxOutputTokens=2400}={}){
-    if(!prepared.images.length&&!prepared.evidence.some(e=>e.kind==='caption'))throw new AppError('분석할 자료가 없습니다.',{code:'missing_input'});
+    if(!prepared.images.length&&!prepared.media_text?.visual?.length&&!prepared.media_text?.audio?.length&&!prepared.evidence.some(e=>e.kind==='caption'))throw new AppError('분석할 자료가 없습니다.',{code:'missing_input'});
     const evidence=prepared.evidence.map(x=>({...x}));
-    const content=[{type:'text',text:JSON.stringify({source_url:sourceUrl,coverage:prepared.coverage,evidence,visual_input_order:prepared.images.map(x=>({evidence_id:x.id,kind:x.kind,time_seconds:x.time_seconds}))})}];
+    const promptEvidence=evidence.map(e=>e.kind==='audio_transcript'&&prepared.media_text?.audio?.length?{...e,text:undefined}:e);
+    const content=[{type:'text',text:JSON.stringify({source_url:sourceUrl,coverage:prepared.coverage,evidence:promptEvidence,media_text:prepared.media_text,visual_input_order:prepared.images.map(x=>({evidence_id:x.id,kind:x.kind,time_seconds:x.time_seconds}))})}];
     for(const img of prepared.images){const bytes=await fs.readFile(img.path);content.push({type:'text',text:`evidence_id=${img.id}`},{type:'image_url',image_url:{url:`data:${img.mime};base64,${bytes.toString('base64')}`}});}
     let response;
     try{response=await this.fetch(this.endpoint,{method:'POST',headers:{'Content-Type':'application/json',...(this.apiKey?{Authorization:`Bearer ${this.apiKey}`}:{})},body:JSON.stringify({model,messages:[{role:'system',content:SYSTEM_PROMPT},{role:'user',content}],temperature:0,max_tokens:maxOutputTokens,response_format:{type:'json_schema',json_schema:{name:'pinmap_post_summary',schema:RESULT_SCHEMA,strict:true}}}),signal:AbortSignal.any([signal||new AbortController().signal,AbortSignal.timeout(900000)]),redirect:'error'});}

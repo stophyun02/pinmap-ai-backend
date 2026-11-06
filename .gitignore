@@ -2,6 +2,7 @@ node_modules/
 .data/
 .data-ollama/
 .multiuser-data/
+.models/
 .env
 .env.*
 !.env.example

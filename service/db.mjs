@@ -44,7 +44,7 @@ export function openDatabase(file){
       post_id TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
       fingerprint TEXT NOT NULL, status TEXT NOT NULL,
       source_url TEXT NOT NULL, material_json TEXT NOT NULL, settings_json TEXT NOT NULL,
-      result_json TEXT, coverage_json TEXT, evidence_json TEXT, usage_json TEXT,
+      result_json TEXT, coverage_json TEXT, evidence_json TEXT, media_text_json TEXT, usage_json TEXT,
       error_json TEXT, lease_until INTEGER, worker_id TEXT,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
     );
@@ -53,10 +53,12 @@ export function openDatabase(file){
   `);
   const postColumns=new Set(db.pragma('table_info(posts)').map(x=>x.name));
   if(postColumns.has('saved_at')&&!postColumns.has('export_timestamp'))db.exec('ALTER TABLE posts RENAME COLUMN saved_at TO export_timestamp');
+  const jobColumns=new Set(db.pragma('table_info(jobs)').map(x=>x.name));
+  if(!jobColumns.has('media_text_json'))db.exec('ALTER TABLE jobs ADD COLUMN media_text_json TEXT');
   return db;
 }
 
 export const now=()=>new Date().toISOString();
 export const parseJson=(value,fallback=null)=>value?JSON.parse(value):fallback;
 export function publicPost(row,assets=[]){return{id:row.id,external_id:row.external_id,source_url:row.source_url,title:row.title,caption:row.caption,export_timestamp:row.export_timestamp,export_fbid:row.export_fbid,created_at:row.created_at,assets:assets.map(({path,user_id,post_id,...a})=>a)};}
-export function publicJob(row){return{id:row.id,post_id:row.post_id,status:row.status,created_at:row.created_at,updated_at:row.updated_at,completed_at:row.completed_at,coverage:parseJson(row.coverage_json),evidence:parseJson(row.evidence_json,[]),result:parseJson(row.result_json),usage:parseJson(row.usage_json),error:parseJson(row.error_json)};}
+export function publicJob(row){return{id:row.id,post_id:row.post_id,status:row.status,created_at:row.created_at,updated_at:row.updated_at,completed_at:row.completed_at,coverage:parseJson(row.coverage_json),evidence:parseJson(row.evidence_json,[]),media_text:parseJson(row.media_text_json),result:parseJson(row.result_json),usage:parseJson(row.usage_json),error:parseJson(row.error_json)};}

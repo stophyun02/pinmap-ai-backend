@@ -9,6 +9,7 @@ import {processJob} from '../service/worker.mjs';
 import {openDatabase} from '../service/db.mjs';
 import {VllmClient} from '../service/vllm-client.mjs';
 import {migrateLegacy} from '../service/migrate-legacy.mjs';
+import {normalizeTranscription,transcriberFromEnv} from '../service/transcription.mjs';
 
 const fixture=path.resolve('fixtures/instagram-export/instagram-080.014-2026-11-04-bV80AR5s.zip');
 const sampleResult={title:'시험',summary:'캡션 기반 요약',summary_evidence_ids:['caption'],topics:[],visible_text:[],facts:[],inferences:[],limitations:[]};
@@ -35,13 +36,45 @@ test('accounts isolate ZIP posts, assets, jobs, and results',async()=>{
     const jobId=queued.body.job.id;assert.equal((await request(`/api/jobs/${jobId}`,{cookie:b.cookie})).status,404);
     assert.equal((await request('/api/jobs',{cookie:b.cookie})).body.jobs.length,0);
     const claimed=claimJob(app.db,'test-worker');assert.equal(claimed.id,jobId);
-    await processJob(app.db,claimed,{dataDir,provider:{supportsAudio:false,async summarize(prepared){assert.ok(prepared.evidence.some(x=>x.id==='caption'));return{result:sampleResult,evidence:prepared.evidence,usage:{input_tokens:10,output_tokens:20},model:'fake'};}}});
-    const done=await request(`/api/jobs/${jobId}`,{cookie:a.cookie});assert.equal(done.body.status,'completed');assert.equal(done.body.result.summary,'캡션 기반 요약');
+    await processJob(app.db,claimed,{dataDir,provider:{async describeImage(img){return{scene:'작은 테스트 이미지',visible_text:[],objects:[],actions:[],uncertainties:[],model:'fake'};},async summarize(prepared){assert.ok(prepared.evidence.some(x=>x.id==='caption'));assert.equal(prepared.images.length,0);assert.equal(prepared.media_text.visual[0].scene,'작은 테스트 이미지');return{result:sampleResult,evidence:prepared.evidence,usage:{input_tokens:10,output_tokens:20},model:'fake'};}}});
+    const done=await request(`/api/jobs/${jobId}`,{cookie:a.cookie});assert.equal(done.body.status,'completed');assert.equal(done.body.result.summary,'캡션 기반 요약');assert.equal(done.body.media_text.visual[0].evidence_id,assetId);
+    assert.equal((await request(`/api/jobs/${jobId}`,{cookie:b.cookie})).status,404);
     assert.equal((await request('/api/results',{cookie:b.cookie})).body.results.length,0);
     const repeated=await request('/api/jobs',{method:'POST',body:{post_id:postId},cookie:a.cookie});assert.equal(repeated.body.reused,true);
     for(let n=0;n<5;n++)assert.equal((await request('/api/auth/login',{method:'POST',body:{email:'a@example.com',password:'incorrect-password'}})).status,401);
     assert.equal((await request('/api/auth/login',{method:'POST',body:{email:'a@example.com',password:'incorrect-password'}})).status,429);
   }finally{await new Promise(resolve=>app.server.close(resolve));app.db.close();await fs.rm(dataDir,{recursive:true,force:true});}
+});
+test('media text persists before synthesis and audio transcription keeps segment times',async()=>{
+  const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pinmap-media-text-')),db=openDatabase(path.join(folder,'pinmap.sqlite')),date=new Date().toISOString();
+  try{
+    db.prepare('INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)').run('u','u@example.com','test',date);
+    db.prepare('INSERT INTO posts(id,user_id,source_url,title,created_at,updated_at) VALUES(?,?,?,?,?,?)').run('p','u','https://www.instagram.com/p/example/','',date,date);
+    db.prepare('INSERT INTO jobs(id,user_id,post_id,fingerprint,status,source_url,material_json,settings_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run('j','u','p','f','queued','https://www.instagram.com/p/example/',JSON.stringify({caption:'',assets:[]}),JSON.stringify({model:'fake',maxImages:2,maxOutputTokens:500,maxVideoSeconds:10}),date,date);
+    const job=claimJob(db,'worker');
+    const prepared={evidence:[{id:'frame:1',kind:'video_frame',time_seconds:1}],images:[{id:'frame:1',kind:'video_frame',time_seconds:1,path:'/unused.png',mime:'image/png'}],audio:[{id:'audio:1',path:'/unused.mp3',mime:'audio/mpeg',duration_seconds:2}],coverage:{kind:'sampled_video',partial:true,audio_status:'pending_transcription'}};
+    await processJob(db,job,{dataDir:folder,prepare:async()=>prepared,provider:{async describeImage(){return{scene:'사람이 걷는다',visible_text:['서울'],objects:['사람'],actions:['걷기'],uncertainties:[],model:'fake'};},async summarize(input){assert.equal(input.images.length,0);assert.equal(input.media_text.visual[0].time_seconds,1);assert.equal(input.media_text.audio[0].segments[0].start_seconds,0.2);assert.equal(input.evidence.at(-1).kind,'audio_transcript');return{result:{...sampleResult,summary_evidence_ids:['frame:1']},evidence:input.evidence,usage:null};}},transcriber:{async transcribe(){return normalizeTranscription({text:'안녕하세요',language:'ko',segments:[{start:0.2,end:1.4,text:'안녕하세요'}]});}}});
+    const saved=db.prepare('SELECT * FROM jobs WHERE id=?').get('j');assert.equal(saved.status,'completed');assert.equal(JSON.parse(saved.media_text_json).visual[0].visible_text[0],'서울');assert.equal(JSON.parse(saved.coverage_json).audio_status,'transcribed');
+    assert.equal(transcriberFromEnv({ASR_PROVIDER:'none'}),null);
+  }finally{db.close();await fs.rm(folder,{recursive:true,force:true});}
+});
+test('audio jobs without ASR stop before summary and keep visual observations',async()=>{
+  const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pinmap-asr-gap-')),db=openDatabase(path.join(folder,'pinmap.sqlite')),date=new Date().toISOString();
+  try{
+    db.prepare('INSERT INTO users(id,email,password_hash,created_at) VALUES(?,?,?,?)').run('u','u@example.com','test',date);
+    db.prepare('INSERT INTO posts(id,user_id,source_url,title,created_at,updated_at) VALUES(?,?,?,?,?,?)').run('p','u','https://www.instagram.com/p/example/','',date,date);
+    db.prepare('INSERT INTO jobs(id,user_id,post_id,fingerprint,status,source_url,material_json,settings_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run('j','u','p','f','queued','https://www.instagram.com/p/example/','{"caption":"","assets":[]}','{"model":"fake"}',date,date);
+    const job=claimJob(db,'worker');
+    await processJob(db,job,{dataDir:folder,prepare:async()=>({evidence:[{id:'image',kind:'image'}],images:[{id:'image',kind:'image',path:'/unused.png'}],audio:[{id:'audio',path:'/unused.mp3'}],coverage:{partial:true}}),transcriber:null,provider:{async describeImage(){return{scene:'꽃',visible_text:[],objects:['꽃'],actions:[],uncertainties:[]};},async summarize(){throw Error('summary must not run');}}});
+    const saved=db.prepare('SELECT status,error_json,media_text_json FROM jobs WHERE id=?').get('j');assert.equal(saved.status,'failed');assert.equal(JSON.parse(saved.error_json).code,'asr_not_configured');assert.equal(JSON.parse(saved.media_text_json).visual[0].scene,'꽃');
+  }finally{db.close();await fs.rm(folder,{recursive:true,force:true});}
+});
+test('vLLM speech endpoint returns transcript and timecoded segments',async()=>{
+  let endpoint,form;
+  const transcriber=transcriberFromEnv({ASR_PROVIDER:'vllm',ASR_BASE_URL:'http://127.0.0.1:8001/v1',ASR_MODEL:'whisper-test'},async(url,options)=>{endpoint=String(url);form=options.body;return Response.json({text:'안녕',language:'ko',segments:[{start:0.1,end:0.8,text:'안녕'}]});});
+  const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pinmap-asr-http-')),file=path.join(folder,'audio.mp3');
+  try{await fs.writeFile(file,Buffer.from('fake-audio'));const result=await transcriber.transcribe({path:file,mime:'audio/mpeg'});assert.equal(endpoint,'http://127.0.0.1:8001/v1/audio/transcriptions');assert.equal(form.get('model'),'whisper-test');assert.equal(result.segments[0].start_seconds,0.1);}
+  finally{await fs.rm(folder,{recursive:true,force:true});}
 });
 test('two worker connections claim distinct users and preserve running jobs on disk',async()=>{
   const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pinmap-queue-')),file=path.join(folder,'queue.sqlite');
@@ -72,6 +105,15 @@ test('vLLM adapter uses structured vision request and validates evidence',async(
   try{await fs.writeFile(image,Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lS8AAAAASUVORK5CYII=','base64'));
     await client.summarize({evidence:[{id:'caption',kind:'caption',text:'시험'},{id:'image',kind:'image'}],images:[{id:'image',kind:'image',mime:'image/png',path:image}],coverage:{kind:'uploaded_images'}},{sourceUrl:'https://www.instagram.com/p/abc/'});
     assert.match(body.messages[1].content.at(-1).image_url.url,/^data:image\/png;base64,/);
+  }finally{await fs.rm(folder,{recursive:true,force:true});}
+});
+test('vLLM converts one image into structured text before synthesis',async()=>{
+  const folder=await fs.mkdtemp(path.join(os.tmpdir(),'pinmap-visual-http-')),file=path.join(folder,'image.png');
+  try{
+    await fs.writeFile(file,Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lS8AAAAASUVORK5CYII=','base64'));
+    let body;const client=new VllmClient({baseUrl:'http://127.0.0.1:8000/v1',model:'vision-test',fetchImpl:async(url,options)=>{body=JSON.parse(options.body);return Response.json({model:'vision-test',choices:[{finish_reason:'stop',message:{content:JSON.stringify({scene:'사람이 걷는 장면',visible_text:['서울'],objects:['사람'],actions:['걷기'],uncertainties:[]})}}]});}});
+    const result=await client.describeImage({id:'frame:1',kind:'video_frame',path:file,mime:'image/png',time_seconds:2});
+    assert.equal(body.response_format.json_schema.name,'pinmap_visual_text');assert.equal(body.messages[1].content[0].text.includes('frame:1'),true);assert.equal(result.visible_text[0],'서울');
   }finally{await fs.rm(folder,{recursive:true,force:true});}
 });
 test('legacy migration assigns historical results only to the chosen account and is repeatable',async()=>{

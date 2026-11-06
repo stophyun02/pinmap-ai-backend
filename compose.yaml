@@ -11,6 +11,7 @@ services:
       PINMAP_INVITE_CODE: ${PINMAP_INVITE_CODE:?set in .env}
       PUBLIC_ORIGIN: https://${PINMAP_DOMAIN:?set in .env}
       MULTIUSER_DAILY_JOB_LIMIT: ${MULTIUSER_DAILY_JOB_LIMIT:-50}
+      MULTIUSER_MAX_IMAGES: ${MULTIUSER_MAX_IMAGES:-20}
     volumes:
       - pinmap_data:/app/data
     networks: [private]
@@ -23,9 +24,14 @@ services:
       MULTIUSER_AI_PROVIDER: ${MULTIUSER_AI_PROVIDER:?set in .env}
       MULTIUSER_MODEL: ${MULTIUSER_MODEL:?set in .env}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      MULTIUSER_MAX_IMAGES: ${MULTIUSER_MAX_IMAGES:-20}
       VLLM_BASE_URL: ${VLLM_BASE_URL:-}
       VLLM_API_KEY: ${VLLM_API_KEY:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://127.0.0.1:11434}
+      ASR_PROVIDER: ${ASR_PROVIDER:-none}
+      ASR_BASE_URL: ${ASR_BASE_URL:-}
+      ASR_MODEL: ${ASR_MODEL:-}
+      ASR_API_KEY: ${ASR_API_KEY:-}
     volumes:
       - pinmap_data:/app/data
     networks: [private]
