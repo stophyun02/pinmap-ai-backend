@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node --env-file-if-exists=.env server.mjs",
+    "start": "node --env-file-if-exists=.env service/api.mjs",
+    "worker": "node --env-file-if-exists=.env service/worker.mjs",
+    "start:legacy": "node --env-file-if-exists=.env server.mjs",
     "start:background": "node start.mjs",
     "start:ollama": "AI_PROVIDER=ollama PORT=8102 node start.mjs",
     "prepare:data": "python3 scripts/import-instagram-export.py",
@@ -15,9 +17,13 @@
   },
   "dependencies": {
     "ajv": "8.20.0",
-    "ffmpeg-static": "5.3.0"
+    "better-sqlite3": "^12.11.1",
+    "busboy": "^1.6.0",
+    "ffmpeg-static": "5.3.0",
+    "yauzl": "^3.4.0"
   },
   "allowScripts": {
-    "ffmpeg-static@5.3.0": true
+    "ffmpeg-static@5.3.0": true,
+    "better-sqlite3@12.11.1": true
   }
 }

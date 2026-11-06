@@ -1,9 +1,11 @@
 node_modules/
 .data/
 .data-ollama/
+.multiuser-data/
 .env
 .env.*
 !.env.example
+!.env.multiuser.example
 *.log
 .DS_Store
 __pycache__/

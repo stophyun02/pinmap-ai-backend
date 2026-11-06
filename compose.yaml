@@ -1,0 +1,50 @@
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      MULTIUSER_HOST: 0.0.0.0
+      MULTIUSER_PORT: 8200
+      MULTIUSER_DATA_DIR: /app/data
+      MULTIUSER_AI_PROVIDER: ${MULTIUSER_AI_PROVIDER:?set in .env}
+      MULTIUSER_MODEL: ${MULTIUSER_MODEL:?set in .env}
+      PINMAP_INVITE_CODE: ${PINMAP_INVITE_CODE:?set in .env}
+      PUBLIC_ORIGIN: https://${PINMAP_DOMAIN:?set in .env}
+      MULTIUSER_DAILY_JOB_LIMIT: ${MULTIUSER_DAILY_JOB_LIMIT:-50}
+    volumes:
+      - pinmap_data:/app/data
+    networks: [private]
+  worker:
+    build: .
+    command: ["node","service/worker.mjs"]
+    restart: unless-stopped
+    environment:
+      MULTIUSER_DATA_DIR: /app/data
+      MULTIUSER_AI_PROVIDER: ${MULTIUSER_AI_PROVIDER:?set in .env}
+      MULTIUSER_MODEL: ${MULTIUSER_MODEL:?set in .env}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      VLLM_BASE_URL: ${VLLM_BASE_URL:-}
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://127.0.0.1:11434}
+    volumes:
+      - pinmap_data:/app/data
+    networks: [private]
+  web:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - 80:80
+      - 443:443
+    environment:
+      PINMAP_DOMAIN: ${PINMAP_DOMAIN:?set in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [private]
+networks:
+  private:
+volumes:
+  pinmap_data:
+  caddy_data:
+  caddy_config:

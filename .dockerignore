@@ -1,0 +1,14 @@
+node_modules
+.env
+.env.*
+.data
+.data-ollama
+.multiuser-data
+fixtures
+tests
+scripts
+web
+*.zip
+*.log
+.git
+.DS_Store
